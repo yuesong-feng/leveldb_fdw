@@ -1,2 +1,9 @@
-# pg_leveldb
-Using LevelDB as PostgreSQL's storage engine. 
+# leveldb_fdw
+
+Foreign-data wrapper for LevelDB.
+
+## Test
+
+```bash
+./test.sh
+```

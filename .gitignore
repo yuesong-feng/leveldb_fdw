@@ -1,0 +1,4 @@
+leveldb_install/
+testdb/
+*.o
+*.so

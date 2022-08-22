@@ -1,0 +1,6 @@
+# leveldb_fdw extension
+comment = 'foreign data wrapper for LevelDB'
+default_version = '1.0'
+module_pathname = '$libdir/leveldb_fdw'
+relocatable = true
+trusted = true
