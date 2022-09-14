@@ -11,6 +11,8 @@ extern "C"
 #include "foreign/foreign.h"
 #include "commands/defrem.h"
 #include "nodes/pg_list.h"
+#include "nodes/makefuncs.h"
+#include "optimizer/appendinfo.h"
     PG_MODULE_MAGIC;
 }
 #include "leveldb/db.h"
@@ -25,6 +27,11 @@ typedef struct LevelDBFdwScanState
     leveldb::Iterator *it;
     bool finish;
 } LevelDBFdwScanState;
+
+typedef struct LevelDBFdwModifyState
+{
+    leveldb::DB *db;
+} LevelDBFdwModifyState;
 
 /*
  * SQL functions
@@ -56,6 +63,24 @@ static void leveldbBeginForeignScan(ForeignScanState *node,
 static TupleTableSlot *leveldbIterateForeignScan(ForeignScanState *node);
 static void leveldbReScanForeignScan(ForeignScanState *node);
 static void leveldbEndForeignScan(ForeignScanState *node);
+static void leveldbBeginForeignInsert(ModifyTableState *mtstate,
+                                      ResultRelInfo *rinfo);
+static TupleTableSlot *leveldbExecForeignInsert(EState *estate,
+                                                ResultRelInfo *rinfo,
+                                                TupleTableSlot *slot,
+                                                TupleTableSlot *planSlot);
+static void leveldbEndForeignInsert(EState *estate,
+                                    ResultRelInfo *rinfo);
+static void
+leveldbAddForeignUpdateTargets(PlannerInfo *root,
+                               Index rtindex,
+                               RangeTblEntry *target_rte,
+                               Relation target_relation);
+static List *
+leveldbPlanForeignModify(PlannerInfo *root,
+                         ModifyTable *plan,
+                         Index resultRelation,
+                         int subplan_index);
 
 /*
  * Foreign-data wrapper handler function: return a struct with pointers
@@ -76,6 +101,10 @@ extern "C"
         fdwroutine->ReScanForeignScan = leveldbReScanForeignScan;
         fdwroutine->EndForeignScan = leveldbEndForeignScan;
 
+        fdwroutine->AddForeignUpdateTargets = leveldbAddForeignUpdateTargets;
+        fdwroutine->BeginForeignInsert = leveldbBeginForeignInsert;
+        fdwroutine->ExecForeignInsert = leveldbExecForeignInsert;
+        fdwroutine->EndForeignInsert = leveldbEndForeignInsert;
         PG_RETURN_POINTER(fdwroutine);
     }
 }
@@ -106,7 +135,7 @@ static void leveldbGetForeignPaths(PlannerInfo *root,
                                                   1,                 // start up cost
                                                   1 + baserel->rows, // total cost
                                                   NIL,               /* no pathkeys */
-                                                  baserel->lateral_relids,
+                                                  NULL,
                                                   NULL, /* no extra plan */
                                                   NIL));
 }
@@ -130,7 +159,7 @@ static ForeignScan *leveldbGetForeignPlan(PlannerInfo *root,
                             scan_clauses,
                             scan_relid,
                             NIL, /* no expressions to evaluate */
-                            best_path->fdw_private,
+                            NIL,
                             NIL, /* no custom tlist */
                             NIL, /* no remote quals */
                             outer_plan);
@@ -148,12 +177,15 @@ static void leveldbBeginForeignScan(ForeignScanState *node,
     LevelDBFdwScanState *fsstate = (LevelDBFdwScanState *)palloc0(sizeof(LevelDBFdwScanState));
 
     fsstate->finish = false;
+
     leveldb::Options options;
     options.create_if_missing = true;
     leveldb::Status status = leveldb::DB::Open(options, "/Users/yuesong/Desktop/postgresql-14.4/contrib/leveldb_fdw/testdb", &fsstate->db);
     assert(status.ok());
+
     fsstate->it = fsstate->db->NewIterator(leveldb::ReadOptions());
     fsstate->it->SeekToFirst();
+    assert(fsstate->it->status().ok());
 
     node->fdw_state = (void *)fsstate;
 }
@@ -192,6 +224,7 @@ static void leveldbReScanForeignScan(ForeignScanState *node)
     LevelDBFdwScanState *fsstate = (LevelDBFdwScanState *)node->fdw_state;
     fsstate->finish = false;
     fsstate->it->SeekToFirst();
+    assert(fsstate->it->status().ok());
 }
 
 static void leveldbEndForeignScan(ForeignScanState *node)
@@ -199,4 +232,70 @@ static void leveldbEndForeignScan(ForeignScanState *node)
     LevelDBFdwScanState *fsstate = (LevelDBFdwScanState *)node->fdw_state;
     delete fsstate->it;
     delete fsstate->db;
+}
+
+static void
+leveldbAddForeignUpdateTargets(PlannerInfo *root,
+                               Index rtindex,
+                               RangeTblEntry *target_rte,
+                               Relation target_relation)
+{
+    Var *var;
+
+    var = makeVar(rtindex,
+                  SelfItemPointerAttributeNumber,
+                  TIDOID,
+                  -1,
+                  InvalidOid,
+                  0);
+    add_row_identity_var(root, var, rtindex, "leveldb_kdy");
+}
+
+static List *
+leveldbPlanForeignModify(PlannerInfo *root,
+                         ModifyTable *plan,
+                         Index resultRelation,
+                         int subplan_index)
+{
+    CmdType operation = plan->operation;
+    RangeTblEntry *rte = planner_rt_fetch(resultRelation, root);
+    Relation rel;
+    List *targetAttrs = NIL;
+    List *array_elem_list = NIL;
+
+    rel = table_open(rte->relid, NoLock);
+    TupleDesc	tupdesc = RelationGetDescr(rel);
+
+
+}
+
+static void leveldbBeginForeignInsert(ModifyTableState *mtstate,
+                                      ResultRelInfo *rinfo)
+{
+    // LevelDBFdwModifyState *fmstate = (LevelDBFdwModifyState *)palloc0(sizeof(LevelDBFdwModifyState));
+
+    // leveldb::Options options;
+    // options.create_if_missing = true;
+    // leveldb::Status status = leveldb::DB::Open(options, "/Users/yuesong/Desktop/postgresql-14.4/contrib/leveldb_fdw/testdb", &fmstate->db);
+    // assert(status.ok());
+
+    // rinfo->ri_FdwState = (void *)fmstate;
+}
+static TupleTableSlot *leveldbExecForeignInsert(EState *estate,
+                                                ResultRelInfo *rinfo,
+                                                TupleTableSlot *slot,
+                                                TupleTableSlot *planSlot)
+{
+    // LevelDBFdwModifyState *fmstate = (LevelDBFdwModifyState *)rinfo->ri_FdwState;
+    // leveldb::DB *db = fmstate->db;
+    // leveldb::Status status = db->Put(leveldb::WriteOptions(), "234", "234");
+    // assert(status.ok());
+
+    return NULL;
+}
+static void leveldbEndForeignInsert(EState *estate,
+                                    ResultRelInfo *rinfo)
+{
+    // LevelDBFdwModifyState *fmstate = (LevelDBFdwModifyState *)rinfo->ri_FdwState;
+    // delete fmstate->db;
 }
